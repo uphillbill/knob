@@ -7,8 +7,14 @@ import CoreGraphics
 final class VolumeKeys {
     enum Key { case up, down, mute }
 
-    /// (key, fineStep, isKeyDown) -> swallow?
+    /// (key, fineStep, isKeyDown) -> swallow? Asked for key-downs only; see `swallowedDowns`.
     var handler: ((Key, Bool, Bool) -> Bool)?
+
+    /// Keys whose last key-down was swallowed. A key-up follows its key-down: swallowed only if
+    /// the down was. Deciding them separately could hand macOS a key-down without its key-up
+    /// (or the reverse) when the output changes mid-press, which leaves the system volume
+    /// indicator stuck on screen.
+    private var swallowedDowns: Set<Key> = []
 
     private var tap: CFMachPort?
     private var source: CFRunLoopSource?
@@ -68,9 +74,15 @@ final class VolumeKeys {
         default: return Unmanaged.passUnretained(event)
         }
 
-        let flags = nsEvent.modifierFlags
-        let fine = flags.contains(.option) && flags.contains(.shift)
-        let swallow = handler?(key, fine, isDown) ?? false
+        let swallow: Bool
+        if isDown {
+            let flags = nsEvent.modifierFlags
+            let fine = flags.contains(.option) && flags.contains(.shift)
+            swallow = handler?(key, fine, true) ?? false
+            if swallow { swallowedDowns.insert(key) } else { swallowedDowns.remove(key) }
+        } else {
+            swallow = swallowedDowns.remove(key) != nil
+        }
         return swallow ? nil : Unmanaged.passUnretained(event)
     }
 }

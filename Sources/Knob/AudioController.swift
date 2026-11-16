@@ -440,8 +440,7 @@ final class AudioController: ObservableObject {
     /// Returns true to swallow the key event. Only takes over the keys when Knob owns the volume.
     private func handleKey(_ key: VolumeKeys.Key, fine: Bool, isDown: Bool) -> Bool {
         log.debug("Volume key \(String(describing: key), privacy: .public) down=\(isDown) softwareMode=\(self.softwareMode)")
-        guard softwareMode, let device = currentDevice else { return false }
-        guard isDown else { return true }
+        guard isDown, softwareMode, let device = currentDevice else { return false }
         let step: Float = fine ? 1.0 / 64.0 : 1.0 / 16.0
         switch key {
         case .up: setMaster(masterVolume + step)
