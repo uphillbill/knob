@@ -102,21 +102,21 @@ Test on real hardware and note results here (generic findings only; no personal 
 
 - [x] **Compiles.** Xcode 27.2 / Swift 6.4 / macOS 27.2 SDK. API note: the `CATapDescription` initializers take `[AudioObjectID]`, not `[NSNumber]`. `AudioHardwareService*` is marked deprecated but works: built-in speakers report hardware volume; USB optical adapters and DisplayPort monitors don't.
 - [x] **No feedback loop.** `HAL.processObject(for: getpid())` returns a real object on first launch, before the engine starts. Level meter: output = input × gain, steady, no growth; clean by ear.
-- [ ] **Input buffer layout.** Device without inputs (USB optical adapter): passes (device 0 + taps 1 = aggregate 1). **Untested** with a device that also has inputs (USB headset, audio interface); the start-up check refuses to start if the layout differs.
+- [x] **Input buffer layout.** Device without inputs (USB optical adapter): passes (device 0 + taps 1 = aggregate 1). Device that also has inputs: tested, works. The start-up check still refuses to start if the layout ever differs.
 - [ ] **Format.** USB optical adapter: tap and aggregate in/out are 2ch 48 kHz Float32 interleaved. Built-in/display speakers still to check (needs an app with a per-app setting, since those devices have their own volume).
 - [ ] **Sound quality.** Unity level matches Knob off exactly; +12 dB boost with the soft limiter is clean by ear. Still to do: 10+ minutes of music with no clicks or dropouts (clock drift).
 - [ ] **Volume keys.** Up/down work in software mode, including the boost range. Still to check: mute, HUD, fine steps, the macOS "can't adjust" indicator no longer appearing, and normal behavior on a device with its own volume.
 - [ ] **Per-app.** Lower Safari (audio comes from `com.apple.WebKit.*` processes, grouped as Safari), Chrome (helper processes), Music. Mute one app while another keeps playing.
-- [ ] **Device switching.** Switching between an optical adapter and built-in speakers from Knob's menu and from System Settings, Knob on and off: passes. Once, an optical receiver stayed silent after switching back even with Knob off, until the device was reselected in System Settings (likely the receiver losing signal lock; not reproduced). Unplugging mid-playback: untested.
+- [x] **Device switching.** Switching between an optical adapter and built-in speakers from Knob's menu and from System Settings, Knob on and off: passes. Once, an optical receiver stayed silent after switching back even with Knob off, until the device was reselected in System Settings (likely the receiver losing signal lock; not reproduced). Unplugging mid-playback: tested, audio recovers.
 - [x] **Escape hatch.** Turning "Knob on" off stops the engine within ~50 ms and macOS plays straight to the device; turning it on restarts the engine.
-- [ ] **Sleep/wake.** Audio and volume control come back after waking.
+- [x] **Sleep/wake.** Audio and volume control come back after waking.
 - [ ] **Permission denied.** If system audio recording is denied, taps may deliver silence while still muting the originals. Detect it (e.g. sustained all-zero input while `kAudioProcessPropertyIsRunningOutput` is true for some app) and stop the engine with a clear status message.
 - [x] **Apps on other devices.** Taps are now limited to the current device's stream 0. Verified: with the engine running on a USB optical adapter, speech sent to the built-in speakers (`say -a "<device name>" …`) played on the built-in speakers, and the music on the adapter kept playing with volume and per-app control working. Devices with more than one output stream: only stream 0 is tapped (other streams play untouched); untested.
 - [ ] **Copy-protected streams.** Streaming video in Safari, Apple Music. Confirm audio is captured, not silenced.
-- [ ] **CPU.** Near zero when idle; low single digits while playing. Still to measure with three EQs running (system + two apps).
+- [x] **CPU.** Near zero when idle; low single digits while playing (`ps` samples 0–4% on Apple silicon). Tested with three EQs running (system + two apps): fine.
 - [x] **EQ checks.** `EQCheck` passes: measured sine gain matches the analytic response within 0.1 dB for every band at 44.1/48/96 kHz, Flat is bit-identical, Float32 coefficients are stable from 22.05 to 192 kHz, 20 s of random settings every buffer stays finite and bounded, coefficient ramps don't step, and every preset peaks at or below 0 dB.
 - [x] **EQ by ear.** On a USB optical adapter: presets switch without clicks, hard slider drags on pink noise are smooth, separate EQs per device are remembered, per-app EQ affects only that app.
-- [ ] **EQ A/B.** All Flat with the engine running sounds identical to Knob off (Flat is skipped in code; confirm by ear on built-in speakers too).
+- [x] **EQ A/B.** All Flat with the engine running sounds identical to Knob off (Flat is skipped in code, bit for bit).
 
 ## Escape hatch
 

@@ -47,7 +47,7 @@ There's **no kernel extension and no virtual audio driver** to install. The taps
 Knob is an early pre-release. Things to know:
 
 - **If you deny the audio recording permission, audio can go silent** instead of Knob stopping by itself. Turn Knob off (or `killall Knob`), then grant the permission in **System Settings → Privacy & Security → Screen & System Audio Recording**.
-- **Tested mainly on Apple silicon with a USB optical adapter and built-in speakers.** Devices that also have inputs, sleep and wake, and unplugging an output mid-playback haven't been fully tested yet. Reports from other setups are very welcome.
+- **Tested mainly on Apple silicon with a USB optical adapter and built-in speakers**, including sleep and wake, unplugging mid-playback, and a device that also has inputs. HDMI and DisplayPort have had less testing. Reports from other setups are very welcome.
 
 ## Privacy
 
