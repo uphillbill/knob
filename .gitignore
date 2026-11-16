@@ -1,0 +1,15 @@
+# SwiftPM / build output
+.build/
+build/
+.swiftpm/
+
+# Xcode
+*.xcuserstate
+xcuserdata/
+DerivedData/
+
+# macOS
+.DS_Store
+
+# Local signing identity
+.signing.env

@@ -1,0 +1,49 @@
+name: Bug report
+description: Something doesn't work as expected
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        If audio went silent, turn **Knob on** off in the menu or run `killall Knob` first.
+        Please don't report security problems here; see SECURITY.md.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: What you did, what you expected, and what happened instead.
+    validations:
+      required: true
+  - type: input
+    id: macos
+    attributes:
+      label: macOS version
+      placeholder: e.g. macOS 15.3 (24D60)
+    validations:
+      required: true
+  - type: input
+    id: knob
+    attributes:
+      label: Knob version or commit
+    validations:
+      required: true
+  - type: textarea
+    id: devices
+    attributes:
+      label: Output device
+      description: Type of output (HDMI, DisplayPort, USB optical adapter, built-in speakers, Bluetooth…) and whether it has its own volume control in macOS.
+    validations:
+      required: true
+  - type: textarea
+    id: apps
+    attributes:
+      label: Apps playing audio
+      description: Which apps were playing, and any per-app settings.
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: |
+        Output of `/usr/bin/log stream --predicate 'subsystem == "io.github.uphillbill.knob"' --level debug` while reproducing the problem.
+        Remove anything you'd rather not share.
+      render: text
