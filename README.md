@@ -41,6 +41,14 @@ Knob uses the **process tap APIs Apple added in macOS 14.2**. A tap captures an 
 
 There's **no kernel extension and no virtual audio driver** to install. The taps belong to the Knob process: if Knob quits or crashes, they disappear and audio goes straight to your device again.
 
+## Known limitations
+
+Knob is an early pre-release. Things to know:
+
+- **Apps playing to a different output get moved.** While Knob's engine is running, an app that sends audio to another device (say, a call on headphones) is muted there and played on your current output instead. Device-specific taps will fix this; until then, turn Knob off for that call.
+- **If you deny the audio recording permission, audio can go silent** instead of Knob stopping by itself. Turn Knob off (or `killall Knob`), then grant the permission in **System Settings → Privacy & Security → Screen & System Audio Recording**.
+- **Tested mainly on Apple silicon with a USB optical adapter and built-in speakers.** Devices that also have inputs, sleep and wake, and unplugging an output mid-playback haven't been fully tested yet. Reports from other setups are very welcome.
+
 ## Privacy
 
 - **No network access.** Knob makes no network connections, and no audio, settings or usage data ever leave your Mac.
@@ -85,7 +93,7 @@ cp .signing.env.example .signing.env    # then set SIGN_ID; the file is gitignor
 
 ## Troubleshooting
 
-**Audio went silent.** Open Knob's menu and turn **Knob on** off, or run `killall Knob` in Terminal. Audio goes straight to your device again immediately. Please [open an issue](https://github.com/uphillbill/knob/issues/new/choose) with what happened.
+**Audio went silent.** Open Knob's menu and turn **Knob on** off, or run `killall Knob` in Terminal. Audio goes straight to your device again immediately. Check [Known limitations](#known-limitations), and if it's not one of those, please [open an issue](https://github.com/uphillbill/knob/issues/new/choose) with what happened.
 
 **The volume keys don't work.**
 - Check **System Settings → Privacy & Security → Accessibility** and make sure Knob is on:
