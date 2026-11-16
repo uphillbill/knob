@@ -1,10 +1,6 @@
 <div align="center">
 
-<img src="docs/images/logo.svg" width="128" height="128" alt="Knob logo">
-
-# Knob
-
-**Volume control for every Mac audio output, plus per-app volume.**
+<img src="docs/images/hero.png" width="800" alt="Knob: volume control for every output on your Mac. Per-app volume, volume keys for HDMI and optical, open source under the MIT license.">
 
 [![macOS 14.2+](https://img.shields.io/badge/macOS-14.2%2B-000000?logo=apple&logoColor=white)](#install)
 [![Swift](https://img.shields.io/badge/Swift-5-F05138?logo=swift&logoColor=white)](https://www.swift.org)
