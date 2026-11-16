@@ -43,6 +43,8 @@ swift build                     # compile only (what CI runs)
 | `MenuView.swift` | SwiftUI `MenuBarExtra` window: devices, master slider, per-app sliders. |
 | `KnobApp.swift` | App entry, delegate, `Knob.id`. |
 
+App icon: `Resources/AppIcon.icns`, built from `docs/images/icon.png` (1024 px, transparent) with `sips` + `iconutil`.
+
 ### Audio path
 
 - The engine runs only when needed: the current device has no hardware volume, **or** a running app has a per-app setting other than 100%/unmuted. Otherwise it's stopped and audio is untouched.

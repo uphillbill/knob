@@ -4,6 +4,8 @@
 <dict>
     <key>CFBundleIdentifier</key>
     <string>io.github.uphillbill.knob</string>
+    <key>CFBundleIconFile</key>
+    <string>AppIcon</string>
     <key>CFBundleName</key>
     <string>Knob</string>
     <key>CFBundleDisplayName</key>
