@@ -45,7 +45,6 @@ There's **no kernel extension and no virtual audio driver** to install. The taps
 
 Knob is an early pre-release. Things to know:
 
-- **Apps playing to a different output get moved.** While Knob's engine is running, an app that sends audio to another device (say, a call on headphones) is muted there and played on your current output instead. Device-specific taps will fix this; until then, turn Knob off for that call.
 - **If you deny the audio recording permission, audio can go silent** instead of Knob stopping by itself. Turn Knob off (or `killall Knob`), then grant the permission in **System Settings → Privacy & Security → Screen & System Audio Recording**.
 - **Tested mainly on Apple silicon with a USB optical adapter and built-in speakers.** Devices that also have inputs, sleep and wake, and unplugging an output mid-playback haven't been fully tested yet. Reports from other setups are very welcome.
 
@@ -113,7 +112,6 @@ cp .signing.env.example .signing.env    # then set SIGN_ID; the file is gitignor
 
 ## Roadmap
 
-- **Device-specific taps**, so an app you send to a different output (say, a call on headphones) is left alone
 - **EQ**
 - **Per-app output routing**
 - **Loudness leveling** across apps

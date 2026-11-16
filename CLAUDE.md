@@ -48,13 +48,14 @@ App icon: `Resources/AppIcon.icns`, built from `docs/images/icon.png` (1024 px, 
 ### Audio path
 
 - The engine runs only when needed: the current device has no hardware volume, **or** a running app has a per-app setting other than 100%/unmuted. Otherwise it's stopped and audio is untouched.
-- When running:
-  - Tap 0: `CATapDescription(stereoGlobalTapButExcludeProcesses:)` excluding Knob itself and every adjusted app.
-  - Taps 1..n: `CATapDescription(stereoMixdownOfProcesses:)`, one per adjusted app (all of that app's helper processes).
-  - Every tap is `.muted` and private, so the originals are silenced and the taps die with the process.
+- When running, every tap is tied to the **current output device's first output stream**, so apps playing to other devices are left alone:
+  - Tap 0: `CATapDescription(excludingProcesses:deviceUID:stream: 0)` excluding Knob itself and every adjusted app.
+  - Taps 1..n: `CATapDescription(processes:deviceUID:stream: 0)`, one per adjusted app (all of that app's helper processes).
+  - Taps use the device stream's own format and channel count (no stereo mixdown).
+  - Every tap is `.muted` and private, so the originals are silenced on that device and the taps die with the process.
   - One private aggregate device: main sub-device = the physical output, tap list = all taps with drift compensation.
-  - The IO proc sums every tap into the device's first two output channels, each multiplied by its gain, with a per-buffer linear ramp, then soft-limits to ±1.
-- Start-up checks (engine refuses to start otherwise): Knob's own process object is known (else the global tap would feed back), every tap and aggregate stream is Float32, and aggregate input buffers = device input buffers + tap buffers.
+- Render (`TapEngine.render`, state in `MixState`, all preallocated): for each block of up to 4096 frames, every tap is mixed channel-for-channel into a non-interleaved mix bus (tap channel c → device channel c; a mono tap feeds channels 0–1; a wider tap into a mono device averages its first two channels), each with its gain ramped linearly over the IO buffer. The mix is soft-limited into every output channel through a precomputed channel map (buffer, offset, stride).
+- Start-up checks (engine refuses to start otherwise): Knob's own process object is known (else tap 0 would feed back), the device has an output stream, every tap and aggregate stream is Float32, taps run at the device's sample rate, and aggregate input buffers = device input buffers + tap buffers.
 - Gains: global = master; app = master × app gain. Master is 1.0 when the device has its own volume (macOS handles it).
 - Master curve (software mode): **50% = unity** (same level as Knob off). 0–50% is a cubic fade to unity; 50–100% boosts linearly in dB up to +12 dB. New devices and switching "Knob on" back on start at 50%, so the level doesn't jump. App curve: cubic for 0–100%, linear boost from 100–200%.
 - Soft limiter: untouched below 0.9 full scale, tanh knee above, so boosts round off peaks rather than crackle.
@@ -91,7 +92,7 @@ Test on real hardware and note results here (generic findings only; no personal 
 - [x] **Escape hatch.** Turning "Knob on" off stops the engine within ~50 ms and macOS plays straight to the device; turning it on restarts the engine.
 - [ ] **Sleep/wake.** Audio and volume control come back after waking.
 - [ ] **Permission denied.** If system audio recording is denied, taps may deliver silence while still muting the originals. Detect it (e.g. sustained all-zero input while `kAudioProcessPropertyIsRunningOutput` is true for some app) and stop the engine with a clear status message.
-- [ ] **Apps on other devices.** The global tap is system-wide, so an app deliberately playing to a *different* device (say a call app on headphones) gets muted there and replayed on the current device while the engine runs. Fix by limiting taps to the current device: `CATapDescription(excludingProcesses:andDeviceUID:withStream:)` / `deviceUID` + `stream`, then handle that device's channel layout instead of a stereo mixdown.
+- [x] **Apps on other devices.** Taps are now limited to the current device's stream 0. Verified: with the engine running on a USB optical adapter, speech sent to the built-in speakers (`say -a "<device name>" …`) played on the built-in speakers, and the music on the adapter kept playing with volume and per-app control working. Devices with more than one output stream: only stream 0 is tapped (other streams play untouched); untested.
 - [ ] **Copy-protected streams.** Streaming video in Safari, Apple Music. Confirm audio is captured, not silenced.
 - [ ] **CPU.** Near zero when idle; low single digits while playing.
 
@@ -101,7 +102,6 @@ If audio goes silent: open the menu and turn "Knob on" off, or `killall Knob`. T
 
 ## Roadmap
 
-- Device-specific taps (see "Apps on other devices").
 - EQ.
 - Per-app output routing.
 - Loudness leveling across apps.
