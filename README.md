@@ -8,7 +8,7 @@
 [![Build](https://github.com/uphillbill/knob/actions/workflows/build.yml/badge.svg)](https://github.com/uphillbill/knob/actions/workflows/build.yml)
 [![Latest release](https://img.shields.io/github/v/release/uphillbill/knob?include_prereleases&sort=semver)](https://github.com/uphillbill/knob/releases)
 
-<img src="docs/images/menu.png" width="360" alt="Knob's menu: output devices, a master volume slider at 70%, per-app sliders with Google Chrome at 100% and Safari at 46%, and the Knob on and Open at login switches">
+<img src="docs/images/menu.png" width="358" alt="Knob's menu: output devices, a master volume slider at 52%, the EQ row set to Hip-hop &amp; Rap with an Edit EQ button, per-app volume, mute and EQ controls for Safari and Spotify, and the Knob on and Open at login switches">
 
 </div>
 
@@ -27,6 +27,16 @@ When your Mac plays through HDMI, DisplayPort or an optical (S/PDIF) adapter, ma
 | 🪶 **Zero overhead when not needed** | On a device with its own volume control, no per-app settings and a Flat EQ, Knob steps aside and audio is untouched. |
 
 At 50%, Knob plays at exactly the level you'd hear without it. The top half of the slider boosts by up to +12 dB, with a soft limiter so loud peaks round off instead of crackling.
+
+### EQ
+
+Pick a preset from the menu, or choose **Edit EQ…** to shape the sound yourself. Each output device keeps its own EQ, so your soundbar and your desk speakers can sound right on their own terms. Turn on EQ for a single app to give it its own curve, for example to make speech clearer in a video call.
+
+<p align="center">
+  <img src="docs/images/eq.png" width="557" alt="The Knob EQ window: EQ for the USB SPDIF Adapter, a response curve, a preamp slider at -7.5 dB and ten band sliders from 31 Hz to 16 kHz set to the Hip-hop &amp; Rap preset, with Preset, Reset and Save as Preset controls">
+</p>
+
+The presets cover common fixes (Bass boost, Bass cut, Treble boost, Treble cut, Vocal boost, Dialogue boost, Small speakers, Loudness, Night) and music styles (Acoustic, Classical, Dance, Deep, Electronic, Hip-hop &amp; Rap, Jazz, Latin, Lounge, Piano, Pop, R&amp;B, Reggae, Rock, Techno). Each preset lowers the preamp so it never pushes loud audio into the limiter, so presets that boost play a little quieter; turn Knob up to match.
 
 ## How it works
 
