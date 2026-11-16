@@ -1,6 +1,7 @@
 import AudioToolbox
 import CoreAudio
 import Foundation
+import KnobDSP
 import os
 
 /// Everything the IO thread needs, allocated before the engine starts and never resized.
@@ -32,10 +33,20 @@ final class MixState {
     /// Peak meters: [0] = loudest tap input sample, [1] = loudest output sample.
     /// Written by the IO thread, read and reset by the main thread (a lost update is harmless).
     let peaks: UnsafeMutablePointer<Float>
+    /// One tap's block, mapped to device channels, before its gain (app EQ runs here).
+    let scratch: UnsafeMutablePointer<Float>
+    /// EQ on the mix, and per tap (tapHasEQ[i] == 1 when tap i has an app EQ).
+    /// The banks are main-thread objects; the IO thread only sees their `state` structs.
+    let systemEQ: EQFilterBank
+    let systemEQState: EQBankState
+    let tapEQ: [EQFilterBank?]
+    let tapEQState: UnsafeMutablePointer<EQBankState>
+    let tapHasEQ: UnsafeMutablePointer<Int>
 
     struct Tap { let channels: Int; let interleaved: Bool }
 
-    init(gains initial: [Float], taps: [Tap], outputBufferChannels: [Int]) {
+    init(gains initial: [Float], taps: [Tap], outputBufferChannels: [Int],
+         sampleRate: Double, systemEQ systemSettings: EQSettings, appEQ: [EQSettings?]) {
         tapCount = min(initial.count, taps.count)
         target = .allocate(capacity: tapCount)
         current = .allocate(capacity: tapCount)
@@ -71,9 +82,26 @@ final class MixState {
             }
         }
         mix = .allocate(capacity: max(outChannels, 1) * Self.blockSize)
+        scratch = .allocate(capacity: max(outChannels, 1) * Self.blockSize)
         peaks = .allocate(capacity: 2)
         peaks[0] = 0
         peaks[1] = 0
+
+        let channels = max(outChannels, 1)
+        systemEQ = EQFilterBank(channels: channels, sampleRate: sampleRate, initial: systemSettings)
+        systemEQState = systemEQ.state
+        var banks: [EQFilterBank?] = []
+        tapEQState = .allocate(capacity: max(tapCount, 1))
+        tapHasEQ = .allocate(capacity: max(tapCount, 1))
+        for i in 0..<tapCount {
+            let settings = i < appEQ.count ? appEQ[i] : nil
+            let bank = settings.map { EQFilterBank(channels: channels, sampleRate: sampleRate, initial: $0) }
+            banks.append(bank)
+            // Taps without an EQ get the system state as a placeholder; tapHasEQ keeps it unused.
+            (tapEQState + i).initialize(to: bank?.state ?? systemEQState)
+            tapHasEQ[i] = bank == nil ? 0 : 1
+        }
+        tapEQ = banks
     }
 
     func set(_ gains: [Float]) {
@@ -81,8 +109,10 @@ final class MixState {
     }
 
     deinit {
-        for p in [target, current, startGain, endGain, mix, peaks] { p.deallocate() }
-        for p in [tapChannels, tapInterleaved, tapFirstBuffer, outBuffer, outOffset, outStride] { p.deallocate() }
+        for p in [target, current, startGain, endGain, mix, scratch, peaks] { p.deallocate() }
+        for p in [tapChannels, tapInterleaved, tapFirstBuffer, outBuffer, outOffset, outStride, tapHasEQ] { p.deallocate() }
+        tapEQState.deinitialize(count: tapCount)
+        tapEQState.deallocate()
     }
 }
 
@@ -108,10 +138,14 @@ final class TapEngine {
     ///   - excludedProcesses: process objects tap 0 must ignore (always include Knob itself).
     ///   - appTaps: one array of process objects per adjusted app.
     ///   - initialGains: one gain per tap: [everything else, app1, app2, ...].
+    ///   - systemEQ: EQ on the mix.
+    ///   - appEQ: one entry per app tap; nil for apps without EQ.
     func start(outputDeviceUID: String,
                excludedProcesses: [AudioObjectID],
                appTaps: [[AudioObjectID]],
-               initialGains: [Float]) throws {
+               initialGains: [Float],
+               systemEQ: EQSettings,
+               appEQ: [EQSettings?]) throws {
         stop()
         do {
             let physical = HAL.device(forUID: outputDeviceUID)
@@ -176,7 +210,10 @@ final class TapEngine {
 
             let mix = MixState(gains: initialGains,
                                taps: taps.map { MixState.Tap(channels: $0.channels, interleaved: $0.interleaved) },
-                               outputBufferChannels: outputBuffers)
+                               outputBufferChannels: outputBuffers,
+                               sampleRate: deviceFormat.mSampleRate,
+                               systemEQ: systemEQ,
+                               appEQ: [nil] + appEQ)
             state = mix
 
             var proc: AudioDeviceIOProcID?
@@ -187,7 +224,7 @@ final class TapEngine {
 
             try check(AudioDeviceStart(aggregate, proc), "Start aggregate device")
             isRunning = true
-            log.info("Engine started: \(tapUIDs.count) taps on stream 0, tap channels \(taps.map(\.channels).description, privacy: .public), output buffers \(outputBuffers.description, privacy: .public)")
+            log.info("Engine started: \(tapUIDs.count) taps on stream 0, tap channels \(taps.map(\.channels).description, privacy: .public), output buffers \(outputBuffers.description, privacy: .public), \(Int(deviceFormat.mSampleRate)) Hz, system EQ \(systemEQ.isFlat ? "flat" : "on", privacy: .public), app EQs \(appEQ.compactMap { $0 }.count)")
         } catch {
             stop()
             throw error
@@ -196,6 +233,18 @@ final class TapEngine {
 
     func setGains(_ values: [Float]) {
         state?.set(values)
+    }
+
+    /// Main thread. Ramped in over the next IO buffer.
+    func setSystemEQ(_ settings: EQSettings) {
+        state?.systemEQ.publish(settings)
+    }
+
+    /// Main thread. `tap` counts from 1 (tap 0 is "everything else"). Ignored for taps built
+    /// without an EQ; turning an app's EQ on or off rebuilds the engine.
+    func setAppEQ(tap: Int, _ settings: EQSettings) {
+        guard let state, tap > 0, tap < state.tapEQ.count, let bank = state.tapEQ[tap] else { return }
+        bank.publish(settings)
     }
 
     /// Peak input and output levels since the last call, then resets them. Main thread only.
@@ -256,10 +305,11 @@ final class TapEngine {
 
     // MARK: - Real-time render (no allocation, no locks, no logging)
 
-    /// Mixes every tap into the device's channels (tap channel c -> device channel c), each with
-    /// its own gain ramped linearly over the buffer, then soft-limits into the output buffers.
-    /// A mono tap feeds the first two channels; a stereo-or-wider tap into a mono device is
-    /// folded to mono from its first two channels.
+    /// For each tap: map its channels onto the device's (tap channel c -> device channel c; a
+    /// mono tap feeds the first two channels; a stereo-or-wider tap into a mono device is folded
+    /// from its first two channels), run the app's EQ if it has one, and add it to the mix with
+    /// its gain ramped linearly over the buffer. Then the system EQ runs on the mix, and the
+    /// soft limiter writes it to the output buffers.
     private static func render(input: UnsafePointer<AudioBufferList>,
                                output: UnsafeMutablePointer<AudioBufferList>,
                                state: MixState) {
@@ -268,6 +318,7 @@ final class TapEngine {
         let outChannels = state.outChannels
         let block = MixState.blockSize
         let mix = state.mix
+        let scratch = state.scratch
         guard outChannels > 0, outList.count > 0 else { return }
 
         // Output frame count from the first output channel's buffer.
@@ -283,7 +334,10 @@ final class TapEngine {
             state.startGain[tap] = state.current[tap]
             state.endGain[tap] = state.target[tap]
             state.current[tap] = state.endGain[tap]
+            if state.tapHasEQ[tap] == 1 { state.tapEQState[tap].beginBuffer() }
         }
+        let systemEQ = state.systemEQState
+        systemEQ.beginBuffer()
 
         var inPeak = state.peaks[0]
         var outPeak = state.peaks[1]
@@ -308,12 +362,9 @@ final class TapEngine {
                     let count = min(n, inFrames - done)
                     guard count > 0 else { continue }
 
-                    let g0 = state.startGain[tap]
-                    let dg = (state.endGain[tap] - g0) * invFrames
-                    let gStart = g0 + dg * Float(done)
-
-                    // Which device channels this tap feeds, and from which tap channel.
+                    // 1. Map the tap's channels onto device channels, into scratch.
                     let feeds = tapChannels == 1 ? min(2, outChannels) : min(tapChannels, outChannels)
+                    var fed = 0
                     for c in 0..<feeds {
                         let source = tapChannels == 1 ? 0 : c
                         let src: UnsafeMutablePointer<Float>
@@ -323,11 +374,11 @@ final class TapEngine {
                             src = data + source
                             stride = tapChannels
                         } else {
-                            guard let data = inList[first + source].mData?.assumingMemoryBound(to: Float.self) else { continue }
+                            guard let data = inList[first + source].mData?.assumingMemoryBound(to: Float.self) else { break }
                             src = data
                             stride = 1
                         }
-                        let dst = mix + c * block
+                        let dst = scratch + c * block
                         // Mono device fed by a stereo-or-wider tap: average the tap's first two channels.
                         var second: UnsafeMutablePointer<Float>? = nil
                         if outChannels == 1 && tapChannels >= 2 {
@@ -338,11 +389,31 @@ final class TapEngine {
                             var v = src[frame * stride]
                             if let second { v = (v + second[frame * stride]) * 0.5 }
                             inPeak = max(inPeak, abs(v))
-                            dst[i] += v * (gStart + dg * Float(i))
+                            dst[i] = v
                         }
+                        fed = c + 1
+                    }
+                    guard fed > 0 else { continue }
+
+                    // 2. The app's own EQ, before mixing.
+                    if state.tapHasEQ[tap] == 1 {
+                        state.tapEQState[tap].process(scratch, channelStride: block, channels: fed, frames: count)
+                    }
+
+                    // 3. Add to the mix with the tap's gain.
+                    let g0 = state.startGain[tap]
+                    let dg = (state.endGain[tap] - g0) * invFrames
+                    let gStart = g0 + dg * Float(done)
+                    for c in 0..<fed {
+                        let src = scratch + c * block
+                        let dst = mix + c * block
+                        for i in 0..<count { dst[i] += src[i] * (gStart + dg * Float(i)) }
                     }
                 }
             }
+
+            // System EQ on the mix (returns at once when Flat).
+            systemEQ.process(mix, channelStride: block, channels: outChannels, frames: n)
 
             // Soft limit into the device buffers. Every output channel is written (zeros if no
             // tap feeds it), so nothing stale is left in the output.

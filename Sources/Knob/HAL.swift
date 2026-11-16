@@ -105,6 +105,10 @@ enum HAL {
         return status == noErr ? device : unknown
     }
 
+    static func nominalSampleRate(_ device: AudioObjectID) -> Double {
+        get(device, address(kAudioDevicePropertyNominalSampleRate), default: Float64(0))
+    }
+
     static func defaultOutputDevice() -> AudioObjectID {
         get(system, address(kAudioHardwarePropertyDefaultOutputDevice), default: unknown)
     }

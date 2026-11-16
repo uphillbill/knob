@@ -17,11 +17,17 @@ struct KnobApp: App {
             Image(systemName: "speaker.wave.2.circle")
         }
         .menuBarExtraStyle(.window)
+
+        Window("Knob EQ", id: "eq") {
+            EQWindow(audio: appDelegate.audio, model: appDelegate.eqWindow)
+        }
+        .windowResizability(.contentSize)
     }
 }
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
     let audio = AudioController()
+    let eqWindow = EQWindowModel()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         audio.start()

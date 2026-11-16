@@ -22,8 +22,9 @@ When your Mac plays through HDMI, DisplayPort or an optical (S/PDIF) adapter, ma
 |---|---|
 | 🔊 **Volume keys for any output** | Volume up, down and mute work on HDMI, DisplayPort and optical outputs, with an on-screen indicator. Option+Shift gives finer steps. |
 | 🎚️ **Per-app volume, 0–200%** | Turn a loud app down, boost a quiet one, or mute one app while the rest keep playing. |
-| 🔀 **Output switching** | Pick the output from the menu bar. Knob remembers a volume for each device. |
-| 🪶 **Zero overhead when not needed** | On a device with its own volume control and no per-app settings, Knob steps aside and audio is untouched. |
+| 🎛️ **EQ** | A 10-band EQ with preamp for each output device, plus optional EQ per app. 25 presets (Bass boost, Dialogue boost, Night, Rock, Hip-hop & Rap, R&B, Jazz…) and your own. |
+| 🔀 **Output switching** | Pick the output from the menu bar. Knob remembers a volume and an EQ for each device. |
+| 🪶 **Zero overhead when not needed** | On a device with its own volume control, no per-app settings and a Flat EQ, Knob steps aside and audio is untouched. |
 
 At 50%, Knob plays at exactly the level you'd hear without it. The top half of the slider boosts by up to +12 dB, with a soft limiter so loud peaks round off instead of crackling.
 
@@ -32,12 +33,12 @@ At 50%, Knob plays at exactly the level you'd hear without it. The top half of t
 ```mermaid
 flowchart LR
     A["Apps<br/>(Music, Safari, Chrome…)"] --> T["Core Audio<br/>process taps"]
-    T --> M["Knob mixer<br/>(gain per app + master)"]
+    T --> M["Knob mixer<br/>(gain + EQ per app, master, device EQ)"]
     M --> G["Private aggregate<br/>device"]
     G --> O["Your output<br/>(HDMI, DisplayPort, optical…)"]
 ```
 
-Knob uses the **process tap APIs Apple added in macOS 14.2**. A tap captures an app's audio and mutes the original, so the only thing your output hears is Knob's mix: one tap for "everything else" and one for each app you've adjusted. Knob applies the gains in real time and plays the result through a private aggregate device built on your output.
+Knob uses the **process tap APIs Apple added in macOS 14.2**. A tap captures an app's audio and mutes the original, so the only thing your output hears is Knob's mix: one tap for "everything else" and one for each app you've adjusted. Knob applies the gains and EQ in real time and plays the result through a private aggregate device built on your output. Each tap covers only your current output, so apps playing to other devices are left alone.
 
 There's **no kernel extension and no virtual audio driver** to install. The taps belong to the Knob process: if Knob quits or crashes, they disappear and audio goes straight to your device again.
 
@@ -60,6 +61,9 @@ Knob is an early pre-release. Things to know:
   | Settings format version | `volumeCurveVersion` |
   | Volume and mute for each device without its own volume control | `deviceVolume.<device ID>`, `deviceMuted.<device ID>` |
   | Volume and mute for apps you've adjusted | `appVolume.<app ID>`, `appMuted.<app ID>` |
+  | EQ for each device, if not Flat | `eq.device.<device ID>` |
+  | EQ for apps you've turned it on for | `eq.app.<app ID>`, `eqOn.app.<app ID>` |
+  | Presets you've saved | `eq.userPresets` |
 
 - **Diagnostics** go to the macOS system log on your Mac, like any app's. Routine messages are held in memory, detailed ones only appear while you're watching the log, only errors are saved to disk, and device IDs are redacted.
 - macOS itself remembers the permissions you grant, and the login item if you turn on **Open at login**.
@@ -112,7 +116,6 @@ cp .signing.env.example .signing.env    # then set SIGN_ID; the file is gitignor
 
 ## Roadmap
 
-- **EQ**
 - **Per-app output routing**
 - **Loudness leveling** across apps
 - **Hotkeys and Shortcuts** actions
@@ -128,3 +131,5 @@ Bug reports, hardware testing and pull requests are welcome. See [CONTRIBUTING.m
 ## Acknowledgments
 
 Built on Apple's Core Audio process tap APIs. See Apple's [Capturing system audio with Core Audio taps](https://developer.apple.com/documentation/coreaudio/capturing-system-audio-with-core-audio-taps) documentation and sample code.
+
+EQ filters use Robert Bristow-Johnson's Audio EQ Cookbook formulas. Preset shapes follow the classic iTunes and Winamp presets, using the values collected by the [Cog](https://github.com/losnoco/Cog) and [Webamp](https://github.com/captbaritone/webamp) projects.

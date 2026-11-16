@@ -2,6 +2,7 @@ import AppKit
 import ApplicationServices
 import CoreAudio
 import Foundation
+import KnobDSP
 import ServiceManagement
 import os
 
@@ -9,7 +10,8 @@ import os
 ///
 /// The engine only runs when it has work to do:
 ///   * the current output device has no volume control of its own (optical, HDMI, DisplayPort...), or
-///   * at least one running app has a per-app volume other than 100% or is muted.
+///   * at least one running app has a per-app volume other than 100% or is muted, or
+///   * the device's EQ, or the EQ of a running app with EQ on, isn't Flat.
 /// Otherwise audio flows untouched and Knob costs nothing.
 final class AudioController: ObservableObject {
     struct AppEntry: Identifiable {
@@ -21,8 +23,16 @@ final class AudioController: ObservableObject {
         var isPlaying: Bool
         var volume: Float      // 0...2, 1 = unchanged
         var muted: Bool
+        var eqOn: Bool
+        var eq: EQSettings
+        /// Volume or mute differs from 100%/unmuted.
         var isAdjusted: Bool { muted || abs(volume - 1) > 0.01 }
+        /// Gets its own tap when the engine runs.
+        var needsTap: Bool { isAdjusted || eqOn }
     }
+
+    /// What the EQ window is editing.
+    enum EQTarget: Hashable { case device, app(String) }
 
     @Published private(set) var devices: [HAL.Device] = []
     @Published private(set) var currentDevice: HAL.Device?
@@ -33,6 +43,18 @@ final class AudioController: ObservableObject {
     @Published private(set) var isOn = true
     @Published private(set) var accessibilityGranted = false
     @Published private(set) var launchAtLogin = false
+    /// EQ of the current output device.
+    @Published private(set) var deviceEQ = EQSettings.flat
+    @Published private(set) var userPresets: [EQPreset] = []
+    @Published var eqTarget = EQTarget.device
+
+    var allPresets: [EQPreset] { EQPreset.builtIn + userPresets }
+    /// Presets in menu sections: tone fixes, music styles, then the user's own.
+    var presetGroups: [[EQPreset]] {
+        let builtIn = EQPreset.builtIn
+        return [Array(builtIn[..<EQPreset.musicStart]), Array(builtIn[EQPreset.musicStart...]), userPresets]
+            .filter { !$0.isEmpty }
+    }
 
     /// True when Knob is the volume control for the current device.
     var softwareMode: Bool { isOn && (currentDevice.map { !$0.hasHardwareVolume } ?? false) }
@@ -46,6 +68,12 @@ final class AudioController: ObservableObject {
     private var engineSignature: String?
     private var engineAppKeys: [String] = []   // app keys in tap order, after the global tap
     private var reconcileWork: DispatchWorkItem?
+    private var reconcileDeadline: DispatchTime?
+    /// After an EQ change, keep the engine running a little even if everything is Flat, so
+    /// dragging a slider through 0 dB doesn't stop and restart it.
+    private var eqKeepAliveUntil = Date.distantPast
+    private var sampleRateDevice = HAL.unknown
+    private var sampleRateListener: AudioObjectPropertyListenerBlock?
     private var pollTimer: Timer?
     private var keysActive = false
     private var infoCache: [String: (name: String, icon: NSImage)] = [:]
@@ -54,6 +82,7 @@ final class AudioController: ObservableObject {
 
     func start() {
         migrateVolumeCurve()
+        loadUserPresets()
         isOn = defaults.object(forKey: "isOn") == nil ? true : defaults.bool(forKey: "isOn")
         installListeners()
         refreshDevices()
@@ -121,6 +150,8 @@ final class AudioController: ObservableObject {
         currentDevice = newDevice
         if changed {
             loadMasterForCurrentDevice()
+            loadDeviceEQ()
+            watchSampleRate(of: newDevice?.id ?? HAL.unknown)
             engineSignature = nil
         }
         scheduleReconcile(immediate: changed)
@@ -136,6 +167,27 @@ final class AudioController: ObservableObject {
             // Unknown device: start at unity (the level macOS sends when nothing adjusts it).
             masterVolume = defaults.object(forKey: key) == nil ? Self.unityPosition : defaults.float(forKey: key)
             muted = defaults.bool(forKey: "deviceMuted.\(device.uid)")
+        }
+    }
+
+    /// A sample-rate change needs new filter coefficients and a fresh engine (which also resets
+    /// the filter state), so treat it like a device change.
+    private func watchSampleRate(of device: AudioObjectID) {
+        var addr = HAL.address(kAudioDevicePropertyNominalSampleRate)
+        if let listener = sampleRateListener, sampleRateDevice != HAL.unknown {
+            AudioObjectRemovePropertyListenerBlock(sampleRateDevice, &addr, DispatchQueue.main, listener)
+        }
+        sampleRateListener = nil
+        sampleRateDevice = device
+        guard device != HAL.unknown else { return }
+        let listener: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
+            guard let self else { return }
+            self.log.info("Sample rate changed to \(HAL.nominalSampleRate(device)) Hz")
+            self.engineSignature = nil
+            self.scheduleReconcile(immediate: true)
+        }
+        if AudioObjectAddPropertyListenerBlock(device, &addr, DispatchQueue.main, listener) == noErr {
+            sampleRateListener = listener
         }
     }
 
@@ -162,17 +214,19 @@ final class AudioController: ObservableObject {
             let volumeKey = "appVolume.\(key)"
             let volume = defaults.object(forKey: volumeKey) == nil ? 1 : defaults.float(forKey: volumeKey)
             let isMuted = defaults.bool(forKey: "appMuted.\(key)")
+            let eqOn = defaults.bool(forKey: "eqOn.app.\(key)")
             let adjusted = isMuted || abs(volume - 1) > 0.01
-            guard group.playing || adjusted else { continue }
+            guard group.playing || adjusted || eqOn else { continue }
             let info = appInfo(for: key)
             result.append(AppEntry(key: key, name: info.name, icon: info.icon,
                                    processObjects: group.objects.sorted(), isPlaying: group.playing,
-                                   volume: volume, muted: isMuted))
+                                   volume: volume, muted: isMuted, eqOn: eqOn,
+                                   eq: EQSettings(stored: defaults.array(forKey: "eq.app.\(key)")) ?? .flat))
         }
         result.sort { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
 
-        let changed = result.map { "\($0.key)\($0.processObjects)\($0.isPlaying)" }
-            != apps.map { "\($0.key)\($0.processObjects)\($0.isPlaying)" }
+        let changed = result.map { "\($0.key)\($0.processObjects)\($0.isPlaying)\($0.eqOn)" }
+            != apps.map { "\($0.key)\($0.processObjects)\($0.isPlaying)\($0.eqOn)" }
         if changed {
             apps = result
             scheduleReconcile(immediate: false)
@@ -228,6 +282,97 @@ final class AudioController: ObservableObject {
     private func appSettingsChanged(_ key: String) {
         if engine.isRunning && engineAppKeys.contains(key) { pushGains() }
         scheduleReconcile(immediate: false)
+    }
+
+    // MARK: - EQ
+
+    private func loadDeviceEQ() {
+        guard let device = currentDevice else { deviceEQ = .flat; return }
+        deviceEQ = EQSettings(stored: defaults.array(forKey: "eq.device.\(device.uid)")) ?? .flat
+    }
+
+    func setDeviceEQ(_ settings: EQSettings) {
+        guard let device = currentDevice else { return }
+        deviceEQ = settings
+        let key = "eq.device.\(device.uid)"
+        if settings.isFlat { defaults.removeObject(forKey: key) } else { defaults.set(settings.stored, forKey: key) }
+        engine.setSystemEQ(settings)
+        eqChanged()
+    }
+
+    func eqSettings(for target: EQTarget) -> EQSettings {
+        switch target {
+        case .device: return deviceEQ
+        case .app(let key): return apps.first { $0.key == key }?.eq ?? .flat
+        }
+    }
+
+    func setEQ(_ settings: EQSettings, for target: EQTarget) {
+        switch target {
+        case .device: setDeviceEQ(settings)
+        case .app(let key): setAppEQ(key, settings)
+        }
+    }
+
+    /// Changing an app's EQ turns it on (the app then gets its own tap).
+    func setAppEQ(_ key: String, _ settings: EQSettings) {
+        guard let index = apps.firstIndex(where: { $0.key == key }) else { return }
+        apps[index].eq = settings
+        let storeKey = "eq.app.\(key)"
+        if settings.isFlat { defaults.removeObject(forKey: storeKey) } else { defaults.set(settings.stored, forKey: storeKey) }
+        if !apps[index].eqOn && !settings.isFlat {
+            setAppEQOn(key, true)
+            return
+        }
+        if let tap = engineAppKeys.firstIndex(of: key) { engine.setAppEQ(tap: tap + 1, settings) }
+        eqChanged()
+    }
+
+    func setAppEQOn(_ key: String, _ on: Bool) {
+        guard let index = apps.firstIndex(where: { $0.key == key }) else { return }
+        log.info("Menu: app EQ \(on ? "on" : "off", privacy: .public)")
+        apps[index].eqOn = on
+        if on { defaults.set(true, forKey: "eqOn.app.\(key)") } else { defaults.removeObject(forKey: "eqOn.app.\(key)") }
+        eqChanged()
+    }
+
+    private func eqChanged() {
+        eqKeepAliveUntil = Date().addingTimeInterval(3)
+        scheduleReconcile(immediate: false)
+    }
+
+    func presetName(for settings: EQSettings) -> String? {
+        allPresets.first { $0.settings.matches(settings) }?.name
+    }
+
+    private func loadUserPresets() {
+        let stored = defaults.dictionary(forKey: "eq.userPresets") ?? [:]
+        let builtInNames = Set(EQPreset.builtIn.map { $0.name.lowercased() })
+        userPresets = stored.compactMap { name, value in
+            // A saved name that later became a built-in preset is hidden (the built-in wins).
+            guard !builtInNames.contains(name.lowercased()) else { return nil }
+            return EQSettings(stored: value).map { EQPreset(name: name, settings: $0) }
+        }
+        .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+    }
+
+    /// Returns false if the name is empty or belongs to a built-in preset.
+    @discardableResult
+    func saveUserPreset(named rawName: String, _ settings: EQSettings) -> Bool {
+        let name = rawName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty, !EQPreset.builtIn.contains(where: { $0.name.caseInsensitiveCompare(name) == .orderedSame }) else { return false }
+        var stored = defaults.dictionary(forKey: "eq.userPresets") ?? [:]
+        stored[name] = settings.stored
+        defaults.set(stored, forKey: "eq.userPresets")
+        loadUserPresets()
+        return true
+    }
+
+    func deleteUserPreset(named name: String) {
+        var stored = defaults.dictionary(forKey: "eq.userPresets") ?? [:]
+        stored[name] = nil
+        if stored.isEmpty { defaults.removeObject(forKey: "eq.userPresets") } else { defaults.set(stored, forKey: "eq.userPresets") }
+        loadUserPresets()
     }
 
     // MARK: - Master volume
@@ -309,30 +454,47 @@ final class AudioController: ObservableObject {
 
     // MARK: - Engine policy
 
+    /// Runs reconcile soon. A pending run that's already due sooner is kept, so a stream of
+    /// changes (a slider drag) still reconciles within 0.4 s instead of waiting for it to stop.
     private func scheduleReconcile(immediate: Bool) {
+        let deadline = DispatchTime.now() + (immediate ? 0.05 : 0.4)
+        if let pending = reconcileDeadline, reconcileWork != nil, pending <= deadline { return }
         reconcileWork?.cancel()
-        let work = DispatchWorkItem { [weak self] in self?.reconcile() }
+        let work = DispatchWorkItem { [weak self] in
+            self?.reconcileWork = nil
+            self?.reconcileDeadline = nil
+            self?.reconcile()
+        }
         reconcileWork = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + (immediate ? 0.05 : 0.4), execute: work)
+        reconcileDeadline = deadline
+        DispatchQueue.main.asyncAfter(deadline: deadline, execute: work)
     }
 
     private func reconcile() {
         guard isOn else { stopEngine("Off"); return }
         guard let device = currentDevice else { stopEngine("No output device"); return }
 
-        let adjusted = apps.filter { $0.isAdjusted && !$0.processObjects.isEmpty }
-        guard softwareMode || !adjusted.isEmpty else {
+        let tapped = apps.filter { $0.needsTap && !$0.processObjects.isEmpty }
+        let eqActive = !deviceEQ.isFlat || tapped.contains { $0.eqOn && !$0.eq.isFlat }
+        let needed = softwareMode || tapped.contains { $0.isAdjusted } || eqActive
+        guard needed || (engine.isRunning && Date() < eqKeepAliveUntil) else {
             stopEngine("Idle: \(device.name) has its own volume control")
             return
         }
+        if !needed {
+            // Everything is Flat right after an EQ change: check again once the slider settles.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 3.1) { [weak self] in self?.scheduleReconcile(immediate: true) }
+        }
 
-        let signature = device.uid + "#\(device.id)|" + adjusted
-            .map { app in "\(app.key)=" + app.processObjects.map { String($0) }.joined(separator: ".") }
+        let sampleRate = HAL.nominalSampleRate(device.id)
+        let signature = device.uid + "#\(device.id)@\(sampleRate)|" + tapped
+            .map { app in "\(app.key)\(app.eqOn ? "+eq" : "")=" + app.processObjects.map { String($0) }.joined(separator: ".") }
             .joined(separator: ",")
         if signature == engineSignature && engine.isRunning {
             pushGains()
             return
         }
+        let adjusted = tapped
 
         let own = HAL.processObject(for: getpid())
         log.info("Own process object for pid \(getpid()): \(own)")
@@ -346,10 +508,13 @@ final class AudioController: ObservableObject {
             try engine.start(outputDeviceUID: device.uid,
                              excludedProcesses: [own],
                              appTaps: adjusted.map(\.processObjects),
-                             initialGains: currentGains())
+                             initialGains: currentGains(),
+                             systemEQ: deviceEQ,
+                             appEQ: adjusted.map { $0.eqOn ? $0.eq : nil })
             engineSignature = signature
             let appNote = adjusted.isEmpty ? "" : " · \(adjusted.count) app\(adjusted.count == 1 ? "" : "s") adjusted"
-            status = "Active on \(device.name)\(appNote)"
+            let eqNote = eqActive ? " · EQ" : ""
+            status = "Active on \(device.name)\(appNote)\(eqNote)"
         } catch {
             engine.stop()
             engineSignature = nil
